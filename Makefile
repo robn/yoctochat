@@ -1,6 +1,6 @@
 CFLAGS := -Wall -ggdb
 
-PROGRAMS := yc_select
+PROGRAMS := yc_select yc_poll
 
 all: $(PROGRAMS)
 
