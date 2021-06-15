@@ -1,11 +1,15 @@
 CFLAGS := -Wall -ggdb
 
-PROGRAMS := yc_select yc_poll yc_epoll
+PROGRAMS_SIMPLE := yc_select yc_poll yc_epoll
+PROGRAMS_URING  := yc_uring
 
-all: $(PROGRAMS)
+all: $(PROGRAMS_SIMPLE) $(PROGRAMS_URING)
 
-$(PROGRAMS): %: %.c
+$(PROGRAMS_SIMPLE): %: %.c
 	$(CC) $(CFLAGS) -o $@ $<
 
+$(PROGRAMS_URING): %: %.c
+	$(CC) $(CFLAGS) -o $@ $< -luring
+
 clean:
-	rm -f $(PROGRAMS)
+	rm -f $(PROGRAMS_SIMPLE) $(PROGRAMS_URING)
