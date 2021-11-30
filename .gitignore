@@ -2,5 +2,6 @@ yc_select
 yc_poll
 yc_epoll
 yc_uring
+yc_kqueue
 .DS_Store
 *.dSYM
