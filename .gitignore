@@ -5,3 +5,4 @@ yc_uring
 yc_kqueue
 .DS_Store
 *.dSYM
+.clang-format
