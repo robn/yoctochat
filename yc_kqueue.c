@@ -11,7 +11,9 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
-
+/* max number of connections. in a real program you probably wouldn't do this,
+ * and instead use a more dynamic structure for tracking connections */
+#define NUM_CONNS (128)
 int main(int argc, char **argv) {
     if (argc < 2) {
         printf("usage: %s <port>\n", argv[0]);
@@ -61,98 +63,98 @@ int main(int argc, char **argv) {
 
     printf("listening on port %d\n", port);
 
+    int conns[NUM_CONNS];
+    memset(&conns, 0, sizeof(conns));
     // Prepare the kqueue.
     int kq = kqueue();
 
-    /* create storage for our active connections. in a real server, this would be
-     * some mapping from file descriptor -> connection object. here the only
-     * thing we're interested is if the descriptor is connected at all, so a bool
-     * (int) is enough: if conns[fd] is true, then fd is connected right now */
-    int conns[FD_SETSIZE];
-    memset(&conns, 0, sizeof(conns));
 
-    /* create the fd_set we will use to register interest in read events */
-    fd_set rfds;
-    FD_ZERO(&rfds);
+    int new_events;
 
-    /* add the server socket; when it becomes "readable", someone connected! */
-    FD_SET(server_fd, &rfds);
+    struct kevent change_event[4], event[4];
 
-    /* we need to tell select() what the upper descriptor in the set is, so it
-   * knows when to stop scanning. honestly these days we could just use
-   * FD_SETSIZE because its laughably small (1024), but this is history */
-    int max_fd = server_fd + 1;
+    // Create event 'filter', these are the events we want to monitor.
+    // Here we want to monitor: socket_listen_fd, for the events: EVFILT_READ
+    // (when there is data to be read on the socket), and perform the following
+    // actions on this kevent: EV_ADD and EV_ENABLE (add the event to the kqueue
+    // and enable it).
+    EV_SET(change_event, server_fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, 0);
 
-    /* the main IO loop! call select, ask it to check the descriptors we're
-   * interested in. any descriptors in the set that aren't have no new activity
-   * will be cleared; any remaining set have activity on them */
-    while (select(max_fd, &rfds, NULL, NULL, NULL) >= 0) {
+    // Register kevent with the kqueue.
+    if (kevent(kq, change_event, 1, NULL, 0, NULL) == -1) {
+        perror("kevent");
+        exit(1);
+    }
 
-        /* if the server socket has activity, someone connected */
-        if (FD_ISSET(server_fd, &rfds)) {
-            /* create storage for their address */
-            struct sockaddr_in sin;
-            socklen_t sinlen = sizeof(sin);
-
-            /* let them in! */
-            int new_fd = accept(server_fd, (struct sockaddr *) &sin, &sinlen);
-            if (new_fd < 0) {
-                perror("accept");
-            } else {
-                /* hello */
-                printf("[%d] connect from %s:%d\n", new_fd, inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
-
-                /* make them non-blocking. this is necessary, because a disconnect will
-         * cause a descriptor to become readable, but reading will block
-         * forever (because they're disconnected. non-blocking will cause
-         * read() to return 0 on a disconnected descriptor, so we can take the
-         * right action */
-                int onoff = 1;
-                if (ioctl(new_fd, FIONBIO, &onoff) < 0) {
-                    printf("fcntl(%d): %s\n", new_fd, strerror(errno));
-                    close(new_fd);
-                    continue;
-                }
-
-                /* remember our new connection. in a real server, you'd create a
-         * connection or user object of some sort, maybe send them a greeting,
-         * begin authentication, etc */
-                conns[new_fd] = 1;
-            }
+    for (;;) {
+        // Check for new events, but do not register new events with
+        // the kqueue. Hence the 2nd and 3rd arguments are NULL, 0.
+        // Only handle 1 new event per iteration in the loop; 5th
+        // argument is 1.
+        new_events = kevent(kq, NULL, 0, event, 1, NULL);
+        if (new_events == -1) {
+            perror("kevent");
+            exit(1);
         }
 
-        /* loop over all our connections, seeing if anything happend */
-        for (int fd = 0; fd < FD_SETSIZE; fd++) {
-            /* skip if no connection */
-            if (!conns[fd])
-                continue;
+        for (int i = 0; new_events > i; i++) {
+            int event_fd = event[i].ident;
 
-            /* is their activity on their fd? */
-            if (FD_ISSET(fd, &rfds)) {
-                /* yes! */
-                printf("[%d] activity\n", fd);
+            // When the client disconnects an EOF is sent. By closing the file
+            // descriptor the event is automatically removed from the kqueue.
+            if (event[i].flags & EV_EOF) {
+                printf("Client has disconnected");
+                close(event_fd);
+            }
+            // If the new event's file descriptor is the same as the listening
+            // socket's file descriptor, we are sure that a new client wants
+            // to connect to our socket.
+            else if (event_fd == server_fd) {
 
-                /* create a buffer to read into */
+                socklen_t sinlen = sizeof(sin);
+                // Incoming socket connection on the listening socket.
+                // Create a new socket for the actual connection to client.
+                int new_fd = accept(event_fd, (struct sockaddr *) &sin, &sinlen);
+                if (new_fd < 0) {
+                    perror("accept");
+                } else {
+                    printf("[%d] connect from %s:%d\n", new_fd, inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
+                    // Put this new socket connection also as a 'filter' event
+                    // to watch in kqueue, so we can now watch for events on this
+                    // new socket.
+                    EV_SET(change_event, new_fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+                    if (kevent(kq, change_event, 1, NULL, 0, NULL) < 0) {
+                        perror("kevent error");
+                    }
+                    /* remember our new connection. in a real server, you'd create a
+                     * connection or user object of some sort, maybe send them a greeting,
+                     * begin authentication, etc */
+                    conns[new_fd] = 1;
+                }
+            }
+
+            else if (event[i].filter & EVFILT_READ) {
+                // Read bytes from socket
                 char buf[1024];
-                int nread = read(fd, buf, sizeof(buf));
-
+                size_t nread = recv(event_fd, buf, sizeof(buf), 0);
+                printf("read %zu bytes\n", nread);
                 /* see how much we read */
                 if (nread < 0) {
                     /* less then zero is some error. disconnect them */
-                    fprintf(stderr, "read(%d): %s\n", fd, strerror(errno));
-                    close(fd);
-                    conns[fd] = 0;
+                    fprintf(stderr, "read(%d): %s\n", event_fd, strerror(errno));
+                    close(event_fd);
+                    conns[event_fd] = 0;
                 }
 
                 else if (nread > 0) {
                     /* we got some stuff from them! */
-                    printf("[%d] read: %.*s\n", fd, nread, buf);
+                    printf("[%d] read: %.*s\n", event_fd, nread, buf);
 
                     /* loop over all our connections, and send stuff onto them! */
-                    for (int dest_fd = 0; dest_fd < FD_SETSIZE; dest_fd++) {
+                    for (int dest_fd = 0; dest_fd < NUM_CONNS; dest_fd++) {
 
                         /* take active connections, but not ourselves */
-                        if (conns[dest_fd] && dest_fd != fd) {
+                        if (conns[dest_fd] && dest_fd != event_fd) {
 
                             /* write to them */
                             if (write(dest_fd, buf, nread) < 0) {
@@ -164,30 +166,6 @@ int main(int argc, char **argv) {
                         }
                     }
                 }
-
-                /* zero byes read */
-                else {
-                    /* so they gracefully disconnected and we should forget them */
-                    printf("[%d] closed\n", fd);
-                    close(fd);
-                    conns[fd] = 0;
-                }
-            }
-        }
-
-        /* we've processed all activity, so now we need to set up the descriptor
-     * set again (remember, select() removes descriptors that had no activity) */
-        FD_ZERO(&rfds);
-
-        /* add the server */
-        FD_SET(server_fd, &rfds);
-        max_fd = server_fd + 1;
-
-        /* and all the active connections */
-        for (int fd = 0; fd < FD_SETSIZE; fd++) {
-            if (conns[fd]) {
-                FD_SET(fd, &rfds);
-                max_fd = fd + 1;
             }
         }
     }
@@ -195,6 +173,6 @@ int main(int argc, char **argv) {
     /* select failed. in a real server you might actually need to handle
    * non-error cases like EINTR, but it complicates this example so we won't
    * bother */
-    perror("select");
+    perror("kevent");
     exit(1);
 }
