@@ -8,9 +8,8 @@
 #include <sys/event.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
-#include <sys/time.h>
-#include <sys/types.h>
 #include <unistd.h>
+
 /* max number of connections. in a real program you probably wouldn't do this,
  * and instead use a more dynamic structure for tracking connections */
 #define NUM_CONNS (128)
@@ -97,14 +96,15 @@ int main(int argc, char **argv) {
             exit(1);
         }
 
-        for (int i = 0; new_events > i; i++) {
+        for (int i = 0; i < new_events; i++) {
             int event_fd = event[i].ident;
 
             // When the client disconnects an EOF is sent. By closing the file
             // descriptor the event is automatically removed from the kqueue.
             if (event[i].flags & EV_EOF) {
-                printf("Client has disconnected");
+                printf("[%d] closed\n", event_fd);
                 close(event_fd);
+                conns[event_fd] = 0;
             }
             // If the new event's file descriptor is the same as the listening
             // socket's file descriptor, we are sure that a new client wants
@@ -134,6 +134,7 @@ int main(int argc, char **argv) {
             }
 
             else if (event[i].filter & EVFILT_READ) {
+                printf("[%d] activity\n", event_fd);
                 // Read bytes from socket
                 char buf[1024];
                 size_t nread = recv(event_fd, buf, sizeof(buf), 0);
@@ -144,9 +145,7 @@ int main(int argc, char **argv) {
                     fprintf(stderr, "read(%d): %s\n", event_fd, strerror(errno));
                     close(event_fd);
                     conns[event_fd] = 0;
-                }
-
-                else if (nread > 0) {
+                } else if (nread > 0) {
                     /* we got some stuff from them! */
                     printf("[%d] read: %.*s\n", event_fd, nread, buf);
 
@@ -170,7 +169,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* select failed. in a real server you might actually need to handle
+    /* kqueue failed. in a real server you might actually need to handle
    * non-error cases like EINTR, but it complicates this example so we won't
    * bother */
     perror("kevent");
