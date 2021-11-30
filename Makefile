@@ -1,6 +1,6 @@
 CFLAGS := -Wall -ggdb
 
-PROGRAMS_SIMPLE := yc_select yc_poll yc_epoll
+PROGRAMS_SIMPLE := yc_select yc_poll yc_epoll yc_kqueue
 PROGRAMS_URING  := yc_uring
 
 all: $(PROGRAMS_SIMPLE) $(PROGRAMS_URING)
