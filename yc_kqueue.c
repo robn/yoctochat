@@ -148,7 +148,7 @@ int main(int argc, char **argv) {
                     conns[event_fd] = 0;
                 } else if (nread > 0) {
                     /* we got some stuff from them! */
-                    printf("[%d] read: %.*s\n", event_fd, nread, buf);
+                    printf("[%d] read: %.*s\n", event_fd, (int) nread, buf);
 
                     /* loop over all our connections, and send stuff onto them! */
                     for (int dest_fd = 0; dest_fd < NUM_CONNS; dest_fd++) {
