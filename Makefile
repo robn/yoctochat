@@ -1,7 +1,13 @@
 CFLAGS := -Wall -ggdb
 
-PROGRAMS_SIMPLE := yc_select yc_poll yc_epoll
-PROGRAMS_URING  := yc_uring
+PROGRAMS_SIMPLE := yc_select yc_poll
+PROGRAMS_URING :=
+
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+PROGRAMS_SIMPLE += yc_epoll
+PROGRAMS_URING  += yc_uring
+endif
 
 all: $(PROGRAMS_SIMPLE) $(PROGRAMS_URING)
 
